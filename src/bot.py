@@ -1,5 +1,6 @@
 import os
 import logging
+import base64
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -16,12 +17,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создать файл credentials из переменной окружения если нужно
-google_creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-if google_creds_json:
+# Создать файл credentials из переменной окружения (base64 encoded)
+google_creds_b64 = os.getenv('GOOGLE_CREDENTIALS_B64')
+if google_creds_b64:
     os.makedirs('config', exist_ok=True)
-    with open('config/google_credentials.json', 'w') as f:
-        f.write(google_creds_json)
+    try:
+        creds_json = base64.b64decode(google_creds_b64).decode()
+        with open('config/google_credentials.json', 'w') as f:
+            f.write(creds_json)
+        logger.info("Google credentials loaded from environment variable")
+    except Exception as e:
+        logger.error(f"Failed to decode credentials: {e}")
 
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
