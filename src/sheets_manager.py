@@ -105,3 +105,29 @@ class SheetsManager:
         ws = self.sheet.worksheet('Долги')
         records = ws.get_all_records()
         return sum(float(r['Остаток']) for r in records)
+
+    def get_snapshot(self) -> dict:
+        today = datetime.now().strftime('%Y-%m-%d')
+        income_records = self.sheet.worksheet('Доходы').get_all_records()
+        expense_records = self.sheet.worksheet('Расходы').get_all_records()
+        today_income = sum(float(r['Сумма']) for r in income_records if r.get('Дата') == today and r.get('Сумма'))
+        today_expense = sum(float(r['Сумма']) for r in expense_records if r.get('Дата') == today and r.get('Сумма'))
+        return {
+            'today_income': today_income,
+            'today_expense': today_expense,
+            'today_balance': today_income - today_expense,
+            'total_debt': self.get_total_debt(),
+        }
+
+    def get_debts(self) -> list:
+        records = self.sheet.worksheet('Долги').get_all_records()
+        return [
+            {
+                'supplier': r['Поставщик'],
+                'original': float(r.get('Изначальный долг') or 0),
+                'paid': float(r.get('Погашено') or 0),
+                'remaining': float(r.get('Остаток') or 0),
+                'status': r.get('Статус', ''),
+            }
+            for r in records if r.get('Поставщик')
+        ]
