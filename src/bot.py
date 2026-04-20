@@ -190,27 +190,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Контекстный совет из базы знаний на основе текущего финансового состояния."""
-    await update.message.reply_text("Думаю...")
+def _load_user_profile() -> str:
+    profile_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'user_profile.md')
     try:
-        snapshot = sheets_manager.get_snapshot()
+        with open(profile_path, encoding='utf-8') as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+async def advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Контекстный совет из базы знаний на основе реального финансового состояния."""
+    await update.message.reply_text("Смотрю твою ситуацию...")
+    try:
+        ctx = sheets_manager.get_rich_context()
         debts = sheets_manager.get_debts()
+        profile = _load_user_profile()
+
         debts_text = "\n".join(
-            f"- {d['supplier']}: осталось {d['remaining']}₴ (из {d['original']}₴)"
+            f"- {d['supplier']}: осталось {d['remaining']}₴ из {d['original']}₴"
             for d in debts if d['remaining'] > 0
         ) or "долгов нет"
 
-        prompt = (
-            f"Текущая финансовая ситуация пользователя:\n"
-            f"Сегодня: доход {snapshot['today_income']}₴, расход {snapshot['today_expense']}₴, "
-            f"баланс {snapshot['today_balance']}₴\n"
-            f"Долги:\n{debts_text}\n\n"
-            f"Дай один конкретный и применимый прямо сейчас совет — "
-            f"основанный на мудрости из книг базы знаний. "
-            f"Укажи из какой книги. Максимум 5 предложений, без воды."
+        categories_text = "\n".join(
+            f"- {cat}: {amt:.0f}₴" for cat, amt in ctx['top_categories']
+        ) or "данных пока нет"
+
+        silence_note = (
+            f"⚠️ За последние 7 дней было {ctx['days_silent']} дней без единой записи."
+            if ctx['days_silent'] > 0 else
+            "Молодец — записи есть каждый день на этой неделе."
         )
-        message = _one_shot(prompt, max_tokens=400)
+
+        prompt = f"""Вот реальная финансовая картина пользователя прямо сейчас.
+
+=== ПРОФИЛЬ ===
+{profile}
+
+=== ФИНАНСЫ ===
+Сегодня: доход {ctx['today_income']}₴ / расход {ctx['today_expense']}₴ / баланс {ctx['today_balance']}₴
+Эта неделя: доход {ctx['week_income']}₴ / расход {ctx['week_expense']}₴ / баланс {ctx['week_balance']}₴
+Этот месяц: доход {ctx['month_income']}₴ / расход {ctx['month_expense']}₴ / баланс {ctx['month_balance']}₴
+Общий долг: {ctx['total_debt']}₴
+
+Долги:
+{debts_text}
+
+Топ категорий расходов за месяц:
+{categories_text}
+
+Дисциплина учёта: {silence_note}
+
+=== ЗАДАЧА ===
+Дай один конкретный совет — именно для этой ситуации, именно сейчас.
+Опирайся на мудрость из книг базы знаний, но переведи её в конкретное действие.
+Укажи из какой книги. Максимум 6 предложений. Никакой воды."""
+
+        message = _one_shot(prompt, max_tokens=450)
         await update.message.reply_text(message)
     except Exception as e:
         logger.error(f"Advice error: {e}")
@@ -241,17 +277,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reminder_morning(context: ContextTypes.DEFAULT_TYPE):
     """08:00 — утренний заряд и намерение на день."""
     try:
-        debts = sheets_manager.get_debts()
-        total_debt = sum(d['remaining'] for d in debts if d['remaining'] > 0)
-        debt_context = f"Общий долг сейчас: {total_debt}₴." if total_debt > 0 else "Долгов нет."
+        ctx = sheets_manager.get_rich_context()
+        profile = _load_user_profile()
+        silence_note = f"Последние {ctx['days_silent']} дней без записей." if ctx['days_silent'] > 1 else ""
 
-        prompt = (
-            f"Сейчас 8 утра. Пользователь только начинает день. {debt_context}\n"
-            f"Напиши короткое утреннее сообщение (3-4 предложения):\n"
-            f"- одна мудрость из книг базы знаний, применимая к его ситуации\n"
-            f"- один конкретный вопрос или намерение на сегодня про деньги\n"
-            f"Тон: живой, как от друга-наставника. Без пафоса."
-        )
+        prompt = f"""Сейчас 8 утра. Пользователь начинает день.
+
+Профиль: {profile}
+
+Финансы за неделю: доход {ctx['week_income']}₴, расход {ctx['week_expense']}₴, долг {ctx['total_debt']}₴.
+{silence_note}
+
+Напиши утреннее сообщение (3-4 предложения):
+- одна мудрость из книг, применимая к его конкретной ситуации прямо сейчас
+- один простой вопрос-намерение на сегодня
+Тон: живой, тёплый, как от друга-наставника. Без пафоса."""
+
         message = _one_shot(prompt)
         await context.bot.send_message(chat_id=TELEGRAM_USER_ID, text=f"☀️ Доброе утро!\n\n{message}")
     except Exception as e:
@@ -288,21 +329,21 @@ async def reminder_afternoon(context: ContextTypes.DEFAULT_TYPE):
 async def reminder_evening(context: ContextTypes.DEFAULT_TYPE):
     """21:00 — вечерние итоги и рефлексия."""
     try:
-        snapshot = sheets_manager.get_snapshot()
-        debts = sheets_manager.get_debts()
-        total_debt = sum(d['remaining'] for d in debts if d['remaining'] > 0)
+        ctx = sheets_manager.get_rich_context()
 
-        prompt = (
-            f"Сейчас вечер, 21:00. Время подводить итоги дня.\n"
-            f"Финансы за сегодня: доход {snapshot['today_income']}₴, "
-            f"расход {snapshot['today_expense']}₴, баланс {snapshot['today_balance']}₴.\n"
-            f"Общий долг: {total_debt}₴.\n\n"
-            f"Напиши вечернее сообщение (4-5 предложений):\n"
-            f"- оцени день (хорошо/нейтрально/есть над чем работать)\n"
-            f"- один вопрос для рефлексии: что можно сделать иначе завтра?\n"
-            f"- напомни записать всё, что ещё не записано\n"
-            f"Тон: поддерживающий, честный."
-        )
+        prompt = f"""Сейчас вечер, 21:00. Время подводить итоги дня.
+
+Сегодня: доход {ctx['today_income']}₴, расход {ctx['today_expense']}₴, баланс {ctx['today_balance']}₴.
+За неделю: доход {ctx['week_income']}₴, расход {ctx['week_expense']}₴.
+Общий долг: {ctx['total_debt']}₴.
+Дней без записей на этой неделе: {ctx['days_silent']}.
+
+Напиши вечернее сообщение (4-5 предложений):
+- честная оценка дня по цифрам
+- один вопрос для рефлексии — конкретный, не банальный
+- напомни записать всё что не записано
+Тон: поддерживающий, прямой."""
+
         message = _one_shot(prompt)
         await context.bot.send_message(chat_id=TELEGRAM_USER_ID, text=f"🌙 Вечерний итог\n\n{message}")
     except Exception as e:

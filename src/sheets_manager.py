@@ -119,6 +119,72 @@ class SheetsManager:
             'total_debt': self.get_total_debt(),
         }
 
+    def get_rich_context(self) -> dict:
+        """Полный финансовый контекст для генерации совета."""
+        from datetime import timedelta
+        today = datetime.now().date()
+        week_ago = today - timedelta(days=7)
+        month_ago = today - timedelta(days=30)
+
+        income_records  = self.sheet.worksheet('Доходы').get_all_records()
+        expense_records = self.sheet.worksheet('Расходы').get_all_records()
+
+        def parse(r, key):
+            try:
+                return float(r.get(key) or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        def in_range(r, start):
+            try:
+                return datetime.strptime(r['Дата'], '%Y-%m-%d').date() >= start
+            except Exception:
+                return False
+
+        week_income  = sum(parse(r, 'Сумма') for r in income_records  if in_range(r, week_ago))
+        week_expense = sum(parse(r, 'Сумма') for r in expense_records if in_range(r, week_ago))
+        month_income  = sum(parse(r, 'Сумма') for r in income_records  if in_range(r, month_ago))
+        month_expense = sum(parse(r, 'Сумма') for r in expense_records if in_range(r, month_ago))
+
+        # Категории расходов за месяц
+        categories: dict[str, float] = {}
+        for r in expense_records:
+            if in_range(r, month_ago):
+                cat = r.get('Категория', 'Прочее') or 'Прочее'
+                categories[cat] = categories.get(cat, 0) + parse(r, 'Сумма')
+        top_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        # Дни без записей за последние 7 дней
+        days_with_records = set()
+        for r in income_records + expense_records:
+            try:
+                d = datetime.strptime(r['Дата'], '%Y-%m-%d').date()
+                if d >= week_ago:
+                    days_with_records.add(d)
+            except Exception:
+                pass
+        days_silent = 7 - len(days_with_records)
+
+        # Сегодня
+        today_str = today.strftime('%Y-%m-%d')
+        today_income  = sum(parse(r, 'Сумма') for r in income_records  if r.get('Дата') == today_str)
+        today_expense = sum(parse(r, 'Сумма') for r in expense_records if r.get('Дата') == today_str)
+
+        return {
+            'today_income':   today_income,
+            'today_expense':  today_expense,
+            'today_balance':  today_income - today_expense,
+            'week_income':    week_income,
+            'week_expense':   week_expense,
+            'week_balance':   week_income - week_expense,
+            'month_income':   month_income,
+            'month_expense':  month_expense,
+            'month_balance':  month_income - month_expense,
+            'total_debt':     self.get_total_debt(),
+            'days_silent':    days_silent,
+            'top_categories': top_categories,
+        }
+
     def get_debts(self) -> list:
         records = self.sheet.worksheet('Долги').get_all_records()
         return [
