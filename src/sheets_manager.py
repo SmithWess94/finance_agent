@@ -7,16 +7,20 @@ from google.oauth2.service_account import Credentials
 
 class SheetsManager:
     def __init__(self):
-        creds_path = os.getenv('GOOGLE_CREDENTIALS_PATH', 'config/google_credentials.json')
         sheet_id = os.getenv('GOOGLE_SHEET_ID')
-        
-        if not os.path.exists(creds_path):
-            raise FileNotFoundError(f"Файл учётных данных Google не найден: {creds_path}")
-        
-        scopes = ['https://www.googleapis.com/auth/spreadsheets', 
+
+        scopes = ['https://www.googleapis.com/auth/spreadsheets',
                   'https://www.googleapis.com/auth/drive']
-        
-        creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
+
+        creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        if creds_json:
+            creds_info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        else:
+            creds_path = os.getenv('GOOGLE_CREDENTIALS_PATH', 'config/google_credentials.json')
+            if not os.path.exists(creds_path):
+                raise FileNotFoundError(f"Файл учётных данных Google не найден: {creds_path}")
+            creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
         self.client = gspread.authorize(creds)
         self.sheet = self.client.open_by_key(sheet_id)
         
