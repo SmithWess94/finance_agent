@@ -213,7 +213,6 @@ def main():
             listen="0.0.0.0",
             port=port,
             webhook_url=f"{webhook_url}/webhook",
-            secret_token=TELEGRAM_BOT_TOKEN[:20],
         )
     else:
         logger.info("Бот запущен в режиме polling...")
