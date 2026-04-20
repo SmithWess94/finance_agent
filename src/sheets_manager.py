@@ -34,7 +34,7 @@ class SheetsManager:
             'Доходы': ['Дата', 'Сумма', 'Источник', 'Категория', 'Комментарий'],
             'Расходы': ['Дата', 'Сумма', 'Категория', 'Комментарий'],
             'Долги': ['Поставщик', 'Изначальный долг', 'Погашено', 'Остаток', 'Срок', 'Статус'],
-            'Прогресс': ['Дата', 'Подушка (₽)', 'Общий долг (₽)', 'Комментарий']
+            'Прогресс': ['Дата', 'Подушка (₴)', 'Общий долг (₴)', 'Комментарий']
         }
         
         for sheet_name, headers in required_sheets.items():
@@ -98,7 +98,7 @@ class SheetsManager:
         today_income = sum(float(r['Сумма']) for r in income_records if r['Дата'] == today)
         today_expense = sum(float(r['Сумма']) for r in expense_records if r['Дата'] == today)
         
-        return f"Доход: {today_income}₽\nРасход: {today_expense}₽\nБаланс: {today_income - today_expense}₽"
+        return f"Доход: {today_income}₴\nРасход: {today_expense}₴\nБаланс: {today_income - today_expense}₴"
     
     def get_total_debt(self) -> float:
         """Получить общую сумму долгов."""

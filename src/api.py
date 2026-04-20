@@ -43,7 +43,7 @@ class ChatReq(BaseModel):
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app_url = f"{WEBHOOK_URL}/app/"
-    text = "Привет! 🍵\n\nЯ твой финансовый наставник.\nПиши обычным текстом или открой дашборд:"
+    text = "Привет! 👋\n\nЯ твой финансовый помощник. Помогу вести учёт, планировать бюджет и разобраться с долгами.\n\nПиши обычным текстом или открой дашборд:"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📊 Открыть дашборд", web_app=WebAppInfo(url=app_url))
     ]])
@@ -140,7 +140,7 @@ async def api_debts():
 async def api_income(req: IncomeReq):
     try:
         await asyncio.to_thread(sheets_manager.add_income, req.amount, req.description)
-        return {"ok": True, "message": f"Доход {req.amount:,.0f}₽ записан"}
+        return {"ok": True, "message": f"Доход {req.amount:,.0f}₴ записан"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -149,7 +149,7 @@ async def api_income(req: IncomeReq):
 async def api_expense(req: ExpenseReq):
     try:
         await asyncio.to_thread(sheets_manager.add_expense, req.amount, req.category)
-        return {"ok": True, "message": f"Расход {req.amount:,.0f}₽ записан"}
+        return {"ok": True, "message": f"Расход {req.amount:,.0f}₴ записан"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -158,7 +158,7 @@ async def api_expense(req: ExpenseReq):
 async def api_repay(req: RepayReq):
     try:
         await asyncio.to_thread(sheets_manager.pay_debt, req.supplier, req.amount)
-        return {"ok": True, "message": f"Платёж {req.amount:,.0f}₽ поставщику {req.supplier} записан"}
+        return {"ok": True, "message": f"Платёж {req.amount:,.0f}₴ поставщику {req.supplier} записан"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
