@@ -196,16 +196,28 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Запуск бота."""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("income", handle_income))
     app.add_handler(CommandHandler("expense", handle_expense))
     app.add_handler(CommandHandler("debt", handle_debt))
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    logger.info("Бот запущен...")
-    app.run_polling()
+
+    webhook_url = os.getenv('WEBHOOK_URL')
+    port = int(os.getenv('PORT', 8080))
+
+    if webhook_url:
+        logger.info(f"Бот запущен в режиме webhook на порту {port}...")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=f"{webhook_url}/webhook",
+            secret_token=TELEGRAM_BOT_TOKEN[:20],
+        )
+    else:
+        logger.info("Бот запущен в режиме polling...")
+        app.run_polling()
 
 if __name__ == '__main__':
     main()
