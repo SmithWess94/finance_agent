@@ -1,5 +1,7 @@
 import os
 import logging
+from datetime import time
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_USER_ID = int(os.getenv('TELEGRAM_USER_ID', 0))
+KYIV_TZ = ZoneInfo('Europe/Kyiv')
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 sheets_manager = SheetsManager()
@@ -73,14 +76,7 @@ TOOLS = [
     }
 ]
 
-
-class TeaAdvisor:
-    def __init__(self):
-        self.conversation_history = []
-        self.system_prompt = self._build_system_prompt()
-
-    def _build_system_prompt(self):
-        return """Ты персональный финансовый помощник. Помогаешь вести учёт личных и деловых финансов, анализировать расходы, управлять долгами и достигать финансовых целей.
+SYSTEM_PROMPT = f"""Ты персональный финансовый наставник. Твоя миссия — провести пользователя от хаоса в финансах к полной ясности и финансовой независимости.
 
 Валюта: гривны (₴). Всегда используй знак ₴.
 
@@ -92,10 +88,16 @@ class TeaAdvisor:
 
 Когда пользователь говорит о деньгах (заработал, потратил, должен) — СРАЗУ используй нужный инструмент, не спрашивай подтверждения. Если сумма не указана — уточни.
 
-Помогаешь с любыми финансовыми вопросами: учёт доходов и расходов, бюджетирование, погашение долгов, накопления, финансовые цели, советы по экономии.
+Стиль: конкретно, тепло, без воды. Ты наставник, а не робот. Когда уместно — подкрепляй советы мудростью из книг ниже. Максимум 1-2 emoji.
 
-Стиль: конкретно, коротко, без воды.
+=== БАЗА ЗНАНИЙ (5 книг о деньгах) ===
+{knowledge_base}
 """
+
+
+class FinanceAdvisor:
+    def __init__(self):
+        self.conversation_history = []
 
     def _execute_tool(self, tool_name, tool_input):
         try:
@@ -117,24 +119,18 @@ class TeaAdvisor:
             return f"Ошибка при записи: {e}"
 
     def chat(self, user_message):
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message
-        })
+        self.conversation_history.append({"role": "user", "content": user_message})
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1024,
-            system=self.system_prompt,
+            system=SYSTEM_PROMPT,
             messages=self.conversation_history,
             tools=TOOLS
         )
 
         if response.stop_reason == "tool_use":
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": response.content
-            })
+            self.conversation_history.append({"role": "assistant", "content": response.content})
 
             tool_results = []
             for block in response.content:
@@ -146,15 +142,12 @@ class TeaAdvisor:
                         "content": result
                     })
 
-            self.conversation_history.append({
-                "role": "user",
-                "content": tool_results
-            })
+            self.conversation_history.append({"role": "user", "content": tool_results})
 
             final = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=512,
-                system=self.system_prompt,
+                system=SYSTEM_PROMPT,
                 messages=self.conversation_history,
                 tools=TOOLS
             )
@@ -162,57 +155,202 @@ class TeaAdvisor:
         else:
             assistant_message = response.content[0].text
 
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": assistant_message
-        })
+        self.conversation_history.append({"role": "assistant", "content": assistant_message})
         return assistant_message
 
 
-advisor = TeaAdvisor()
+def _one_shot(prompt: str, max_tokens: int = 350) -> str:
+    """Одиночный вызов Claude без сохранения истории — для напоминаний и советов."""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.content[0].text
 
+
+advisor = FinanceAdvisor()
+
+
+# ── Команды ──────────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    message = f"""Привет, {user.first_name}! 🍵
+    await update.message.reply_text(
+        f"Привет, {user.first_name}!\n\n"
+        "Я твой финансовый наставник. Пиши мне как обычно:\n\n"
+        "«Заработал сегодня 3000 на церемонии»\n"
+        "«Потратил 800 на продукты»\n"
+        "«Покажи итоги дня»\n\n"
+        "Команды:\n"
+        "/совет — мудрость из книг по твоей ситуации\n"
+        "/итоги — отчёт за день\n\n"
+        "Всё запишу в таблицу."
+    )
 
-Я твой финансовый наставник. Просто пиши мне как обычно:
 
-"Заработал сегодня 5000 рублей на продаже чая"
-"Потратил 1500 на аренду"
-"Должен поставщику Иван Иваныч 8000"
-"Покажи итоги дня"
+async def advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Контекстный совет из базы знаний на основе текущего финансового состояния."""
+    await update.message.reply_text("Думаю...")
+    try:
+        snapshot = sheets_manager.get_snapshot()
+        debts = sheets_manager.get_debts()
+        debts_text = "\n".join(
+            f"- {d['supplier']}: осталось {d['remaining']}₴ (из {d['original']}₴)"
+            for d in debts if d['remaining'] > 0
+        ) or "долгов нет"
 
-Всё запишу в таблицу и дам совет."""
+        prompt = (
+            f"Текущая финансовая ситуация пользователя:\n"
+            f"Сегодня: доход {snapshot['today_income']}₴, расход {snapshot['today_expense']}₴, "
+            f"баланс {snapshot['today_balance']}₴\n"
+            f"Долги:\n{debts_text}\n\n"
+            f"Дай один конкретный и применимый прямо сейчас совет — "
+            f"основанный на мудрости из книг базы знаний. "
+            f"Укажи из какой книги. Максимум 5 предложений, без воды."
+        )
+        message = _one_shot(prompt, max_tokens=400)
+        await update.message.reply_text(message)
+    except Exception as e:
+        logger.error(f"Advice error: {e}")
+        await update.message.reply_text("Не смог получить данные из таблицы. Попробуй ещё раз.")
 
-    await update.message.reply_text(message)
+
+async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        stats = sheets_manager.get_daily_summary()
+        response = advisor.chat(f"Вот мой отчёт за сегодня: {stats}. Прокомментируй коротко.")
+        await update.message.reply_text(f"📊 {stats}\n\n{response}")
+    except Exception as e:
+        logger.error(f"Summary error: {e}")
+        await update.message.reply_text("Ошибка при получении отчёта.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        user_message = update.message.text
-        response = advisor.chat(user_message)
+        response = advisor.chat(update.message.text)
         await update.message.reply_text(response)
     except Exception as e:
-        logger.error(f"Error in handle_message: {e}")
-        await update.message.reply_text("Произошла ошибка при обработке сообщения")
+        logger.error(f"Message error: {e}")
+        await update.message.reply_text("Произошла ошибка. Попробуй ещё раз.")
 
 
-async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ── Напоминания ───────────────────────────────────────────────────────────────
+
+async def reminder_morning(context: ContextTypes.DEFAULT_TYPE):
+    """08:00 — утренний заряд и намерение на день."""
     try:
-        stats = sheets_manager.get_daily_summary()
-        response = advisor.chat(f"Вот мой отчёт за день: {stats}")
-        await update.message.reply_text(f"📊 Итоги дня:\n{stats}\n\n{response}")
+        debts = sheets_manager.get_debts()
+        total_debt = sum(d['remaining'] for d in debts if d['remaining'] > 0)
+        debt_context = f"Общий долг сейчас: {total_debt}₴." if total_debt > 0 else "Долгов нет."
+
+        prompt = (
+            f"Сейчас 8 утра. Пользователь только начинает день. {debt_context}\n"
+            f"Напиши короткое утреннее сообщение (3-4 предложения):\n"
+            f"- одна мудрость из книг базы знаний, применимая к его ситуации\n"
+            f"- один конкретный вопрос или намерение на сегодня про деньги\n"
+            f"Тон: живой, как от друга-наставника. Без пафоса."
+        )
+        message = _one_shot(prompt)
+        await context.bot.send_message(chat_id=TELEGRAM_USER_ID, text=f"☀️ Доброе утро!\n\n{message}")
     except Exception as e:
-        logger.error(f"Error in summary: {e}")
-        await update.message.reply_text("Ошибка при получении отчёта")
+        logger.error(f"Morning reminder error: {e}")
+
+
+async def reminder_afternoon(context: ContextTypes.DEFAULT_TYPE):
+    """14:00 — дневная проверка."""
+    try:
+        snapshot = sheets_manager.get_snapshot()
+        has_records = snapshot['today_income'] > 0 or snapshot['today_expense'] > 0
+
+        if has_records:
+            prompt = (
+                f"Сейчас 14:00. У пользователя уже записано за сегодня: "
+                f"доход {snapshot['today_income']}₴, расход {snapshot['today_expense']}₴. "
+                f"Напиши короткое одобрительное сообщение (2-3 предложения) — "
+                f"молодец что записывает, и напомни проверить ещё раз вечером."
+            )
+        else:
+            prompt = (
+                f"Сейчас 14:00. Пользователь ещё ничего не записал за сегодня. "
+                f"Напиши короткое мягкое напоминание (2-3 предложения) — "
+                f"зафиксировать любые движения денег за утро. "
+                f"Можно сослаться на принцип из книг базы знаний."
+            )
+
+        message = _one_shot(prompt, max_tokens=200)
+        await context.bot.send_message(chat_id=TELEGRAM_USER_ID, text=f"💡 {message}")
+    except Exception as e:
+        logger.error(f"Afternoon reminder error: {e}")
+
+
+async def reminder_evening(context: ContextTypes.DEFAULT_TYPE):
+    """21:00 — вечерние итоги и рефлексия."""
+    try:
+        snapshot = sheets_manager.get_snapshot()
+        debts = sheets_manager.get_debts()
+        total_debt = sum(d['remaining'] for d in debts if d['remaining'] > 0)
+
+        prompt = (
+            f"Сейчас вечер, 21:00. Время подводить итоги дня.\n"
+            f"Финансы за сегодня: доход {snapshot['today_income']}₴, "
+            f"расход {snapshot['today_expense']}₴, баланс {snapshot['today_balance']}₴.\n"
+            f"Общий долг: {total_debt}₴.\n\n"
+            f"Напиши вечернее сообщение (4-5 предложений):\n"
+            f"- оцени день (хорошо/нейтрально/есть над чем работать)\n"
+            f"- один вопрос для рефлексии: что можно сделать иначе завтра?\n"
+            f"- напомни записать всё, что ещё не записано\n"
+            f"Тон: поддерживающий, честный."
+        )
+        message = _one_shot(prompt)
+        await context.bot.send_message(chat_id=TELEGRAM_USER_ID, text=f"🌙 Вечерний итог\n\n{message}")
+    except Exception as e:
+        logger.error(f"Evening reminder error: {e}")
+
+
+async def reminder_check(context: ContextTypes.DEFAULT_TYPE):
+    """21:30 — если за день ничего не записано, отправить последний толчок."""
+    try:
+        snapshot = sheets_manager.get_snapshot()
+        if snapshot['today_income'] == 0 and snapshot['today_expense'] == 0:
+            await context.bot.send_message(
+                chat_id=TELEGRAM_USER_ID,
+                text=(
+                    "Эй, сегодня в таблице пусто 👀\n\n"
+                    "Даже если день был тихий — запиши хоть что-то. "
+                    "Привычка важнее суммы. Бавилонский купец записывал каждую монету — "
+                    "это и был его секрет богатства.\n\n"
+                    "Что было сегодня? Напиши мне."
+                )
+            )
+    except Exception as e:
+        logger.error(f"Check reminder error: {e}")
+
+
+# ── Запуск ────────────────────────────────────────────────────────────────────
+
+async def post_init(application: Application):
+    """Регистрируем ежедневные задачи после инициализации приложения."""
+    jq = application.job_queue
+    jq.run_daily(reminder_morning,   time=time(8,  0,  tzinfo=KYIV_TZ), name="morning")
+    jq.run_daily(reminder_afternoon, time=time(14, 0,  tzinfo=KYIV_TZ), name="afternoon")
+    jq.run_daily(reminder_evening,   time=time(21, 0,  tzinfo=KYIV_TZ), name="evening")
+    jq.run_daily(reminder_check,     time=time(21, 30, tzinfo=KYIV_TZ), name="check")
+    logger.info("Ежедневные напоминания зарегистрированы (08:00, 14:00, 21:00, 21:30 Киев)")
 
 
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("summary", summary))
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("совет",  advice_command))
+    app.add_handler(CommandHandler("итоги",  summary_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     webhook_url = os.getenv('WEBHOOK_URL')

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import time
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -11,14 +12,18 @@ from pydantic import BaseModel
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from src.bot import TeaAdvisor, advisor, sheets_manager, TELEGRAM_BOT_TOKEN
+from src.bot import (
+    FinanceAdvisor, advisor, sheets_manager, TELEGRAM_BOT_TOKEN,
+    reminder_morning, reminder_afternoon, reminder_evening, reminder_check,
+    advice_command, KYIV_TZ,
+)
 
 load_dotenv()
 
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '').rstrip('/')
 logger = logging.getLogger(__name__)
 
-mini_app_advisor = TeaAdvisor()
+mini_app_advisor = FinanceAdvisor()
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -86,12 +91,22 @@ ptb_app: Application = None
 async def lifespan(app: FastAPI):
     global ptb_app
     ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    ptb_app.add_handler(CommandHandler("start", start_handler))
-    ptb_app.add_handler(CommandHandler("menu", menu_handler))
+    ptb_app.add_handler(CommandHandler("start",  start_handler))
+    ptb_app.add_handler(CommandHandler("menu",   menu_handler))
     ptb_app.add_handler(CommandHandler("summary", summary_handler))
+    ptb_app.add_handler(CommandHandler("совет",  advice_command))
     ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     await ptb_app.initialize()
+
+    jq = ptb_app.job_queue
+    if jq:
+        jq.run_daily(reminder_morning,   time=time(8,  0,  tzinfo=KYIV_TZ), name="morning")
+        jq.run_daily(reminder_afternoon, time=time(14, 0,  tzinfo=KYIV_TZ), name="afternoon")
+        jq.run_daily(reminder_evening,   time=time(21, 0,  tzinfo=KYIV_TZ), name="evening")
+        jq.run_daily(reminder_check,     time=time(21, 30, tzinfo=KYIV_TZ), name="check")
+        logger.info("Напоминания зарегистрированы (08:00, 14:00, 21:00, 21:30 Киев)")
+
     if WEBHOOK_URL:
         await ptb_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
         logger.info(f"Webhook set: {WEBHOOK_URL}/webhook")
