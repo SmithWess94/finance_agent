@@ -16,6 +16,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Создать файл credentials из переменной окружения если нужно
+google_creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+if google_creds_json:
+    os.makedirs('config', exist_ok=True)
+    with open('config/google_credentials.json', 'w') as f:
+        f.write(google_creds_json)
+
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_USER_ID = int(os.getenv('TELEGRAM_USER_ID', 0))
